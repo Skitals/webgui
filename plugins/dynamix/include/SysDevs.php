@@ -21,14 +21,34 @@ case 't1':
     foreach ($lspci as $line) echo "<tr><td>".$iommu[$i++]."</td><td>$line</td></tr>";
     $noiommu = true;
   } else {
-    if (is_file("/boot/config/vfio-pci.cfg")) $file = file_get_contents("/boot/config/vfio-pci.cfg");
+    $BDF_REGEX = '/^[[:xdigit:]]{2}:[[:xdigit:]]{2}\.[[:xdigit:]]$/';
+    $DBDF_REGEX = '/^[[:xdigit:]]{4}:[[:xdigit:]]{2}:[[:xdigit:]]{2}\.[[:xdigit:]]$/';
+    $DBDF_PARTIAL_REGEX = '/[[:xdigit:]]{4}:[[:xdigit:]]{2}:[[:xdigit:]]{2}\.[[:xdigit:]]/';
+    $vfio_cfg_devices = array ();
+    if (is_file("/boot/config/vfio-pci.cfg")) {
+      $file = file_get_contents("/boot/config/vfio-pci.cfg");
+      $file = trim(str_replace("BIND=", "", $file));
+      $file_contents = explode(" ", $file);
+      foreach ($file_contents as $vfio_cfg_device) {
+        if (preg_match($BDF_REGEX, $vfio_cfg_device)) {
+          // only <Bus:Device.Function> was provided, assume Domain is 0000
+          $vfio_cfg_devices[] = "0000:".$vfio_cfg_device;
+        } else if (preg_match($DBDF_REGEX, $vfio_cfg_device)) {
+          // full <Domain:Bus:Device.Function> was provided
+          $vfio_cfg_devices[] = $vfio_cfg_device;
+        } else {
+          // entry in wrong format, discard
+        }
+      }
+      $vfio_cfg_devices = array_values(array_unique($vfio_cfg_devices, SORT_STRING));
+    }
     $disks = (array)parse_ini_file('state/disks.ini',true);
     $devicelist = array_column($disks, 'device');
     $lines = array ();
     foreach ($devicelist as $line) {
       if (!empty($line)) {
         exec('udevadm info --path=$(udevadm info -q path /dev/'.$line.' | cut -d / -f 1-7) --query=path',$linereturn);
-        preg_match_all('/..:..\../', $linereturn[0], $inuse);
+        preg_match_all($DBDF_PARTIAL_REGEX, $linereturn[0], $inuse);
         foreach ($inuse[0] as $line) {
           $lines[] = $line;
         }
@@ -41,7 +61,7 @@ case 't1':
     foreach ($networklist as $line) {
       if (!empty($line)) {
         exec('readlink /sys/class/net/'.$line,$linereturn);
-        preg_match_all('/..:..\../', $linereturn[0], $inuse);
+        preg_match_all($DBDF_PARTIAL_REGEX, $linereturn[0], $inuse);
         foreach ($inuse[0] as $line) {
           $lines[] = $line;
         }
@@ -49,9 +69,11 @@ case 't1':
         unset($linereturn);
       }
     }
+    $lines = array_values(array_unique($lines, SORT_STRING));
+
     $iommuinuse = array ();
     foreach ($lines as $pciinuse){
-      $string = exec("ls /sys/kernel/iommu_groups/*/devices/0000:$pciinuse -1 -d");
+      $string = exec("ls /sys/kernel/iommu_groups/*/devices/$pciinuse -1 -d");
       $string = substr($string,25,2);
       $iommuinuse[] = (strpos($string,'/')) ? strstr($string, '/', true) : $string;
     }
@@ -65,7 +87,11 @@ case 't1':
         $append = true;
       } else {
         $line = preg_replace("/^\t/","",$line);
-        $pciaddress = substr($line, 12, 7);
+        $pciaddress = explode(" ", $line)[1];
+        if (preg_match($BDF_REGEX, $pciaddress)) {
+          // only <Bus:Device.Function> was provided, assume Domain is 0000
+          $pciaddress = "0000:".$pciaddress;
+        }
         echo ($append)?"":"<tr><td></td><td>";
         exec("lspci -v -s $pciaddress", $outputvfio);
         if (preg_grep("/vfio-pci/i", $outputvfio)) {
@@ -74,10 +100,10 @@ case 't1':
         }
         echo "</td><td>";
         if ((strpos($line, 'Host bridge') === false) && (strpos($line, 'PCI bridge') === false)) {
-          if (file_exists('/sys/kernel/iommu_groups/'.$iommu.'/devices/0000:'.$pciaddress.'/reset')) echo "<i class=\"fa fa-retweet grey-orb middle\" title=\"Function Level Reset (FLR) supported.\"></i>";
+          if (file_exists('/sys/kernel/iommu_groups/'.$iommu.'/devices/'.$pciaddress.'/reset')) echo "<i class=\"fa fa-retweet grey-orb middle\" title=\"Function Level Reset (FLR) supported.\"></i>";
           echo "</td><td>";
           echo in_array($iommu, $iommuinuse) ? ' <input type="checkbox" value="" title="In use by Unraid" disabled ' : ' <input type="checkbox" class="iommu'.$iommu.'" value="'.$pciaddress.'" ';
-          echo (strpos($file, $pciaddress) !== false) ? " checked>" : ">";
+          echo in_array($pciaddress, $vfio_cfg_devices) ? " checked>" : ">";
         } else { echo "</td><td>"; }
         echo '</td><td title="';
         foreach ($outputvfio as $line2) echo "$line2&#10;";
