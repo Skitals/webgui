@@ -131,10 +131,7 @@ case 't1':
             if ($isbound) {
               echo '<tr><td></td><td></td><td></td><td></td><td style="padding-left: 50px;">This controller is bound to vfio, connected drives are not visible.</td></tr>';
             } else {
-              exec('ls -al /sys/block/sd* | grep -i "'.$pciaddress.'"',$getsata);
-              exec('ls -al /sys/block/hd* | grep -i "'.$pciaddress.'"',$getsata);
-              exec('ls -al /sys/block/sr* | grep -i "'.$pciaddress.'"',$getsata);
-              exec('ls -al /sys/block/nvme* | grep -i "'.$pciaddress.'"',$getsata);
+              exec('ls -al /sys/block/sd* /sys/block/hd* /sys/block/sr* /sys/block/nvme* 2>/dev/null | grep -i "'.$pciaddress.'"',$getsata);
               foreach($getsata as $satadevice) {
                 $satadevice = substr($satadevice, strrpos($satadevice, '/', -1)+1);
                 $search = preg_grep('/'.$satadevice.'.*/', $lsscsi);
